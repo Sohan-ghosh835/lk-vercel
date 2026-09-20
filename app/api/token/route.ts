@@ -13,32 +13,38 @@ type ConnectionDetails = {
   participantToken: string;
 };
 
-// NOTE: you are expected to define the following environment variables in `.env.local`:
-const API_KEY = process.env.LIVEKIT_API_KEY;
-const API_SECRET = process.env.LIVEKIT_API_SECRET;
-const LIVEKIT_URL = process.env.LIVEKIT_URL;
-
 // don't cache the results
 export const revalidate = 0;
+export const dynamic = 'force-dynamic';
 
-export async function POST(req: Request) {
+async function handleTokenRequest(req: Request) {
+  const API_KEY = process.env.LIVEKIT_API_KEY;
+  const API_SECRET = process.env.LIVEKIT_API_SECRET;
+  const LIVEKIT_URL = process.env.LIVEKIT_URL;
 
   try {
-    if (LIVEKIT_URL === undefined) {
-      throw new Error('LIVEKIT_URL is not defined');
+    if (!LIVEKIT_URL) {
+      throw new Error('LIVEKIT_URL is not defined in environment variables');
     }
-    if (API_KEY === undefined) {
-      throw new Error('LIVEKIT_API_KEY is not defined');
+    if (!API_KEY) {
+      throw new Error('LIVEKIT_API_KEY is not defined in environment variables');
     }
-    if (API_SECRET === undefined) {
-      throw new Error('LIVEKIT_API_SECRET is not defined');
+    if (!API_SECRET) {
+      throw new Error('LIVEKIT_API_SECRET is not defined in environment variables');
     }
 
-    // Parse room config from request body.
-    const body = await req.json();
-    const roomConfig = body?.room_config
-      ? RoomConfiguration.fromJson(body.room_config, { ignoreUnknownFields: true })
-      : new RoomConfiguration();
+    // Parse room config from request body if POST
+    let roomConfig = new RoomConfiguration();
+    if (req.method === 'POST') {
+      try {
+        const body = await req.json();
+        if (body?.room_config) {
+          roomConfig = RoomConfiguration.fromJson(body.room_config, { ignoreUnknownFields: true });
+        }
+      } catch {
+        // ignore body parse errors
+      }
+    }
 
     // Generate participant token
     const participantName = 'user';
@@ -46,6 +52,8 @@ export async function POST(req: Request) {
     const roomName = `voice_assistant_room_${Math.floor(Math.random() * 10_000)}`;
 
     const participantToken = await createParticipantToken(
+      API_KEY,
+      API_SECRET,
       { identity: participantIdentity, name: participantName },
       roomName,
       roomConfig
@@ -59,23 +67,34 @@ export async function POST(req: Request) {
       participantToken,
     };
     const headers = new Headers({
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'no-store, max-age=0',
     });
     return NextResponse.json(data, { headers });
   } catch (error) {
     if (error instanceof Error) {
-      console.error(error);
+      console.error('Token generation error:', error.message);
       return new NextResponse(error.message, { status: 500 });
     }
+    return new NextResponse('Internal server error', { status: 500 });
   }
 }
 
+export async function POST(req: Request) {
+  return handleTokenRequest(req);
+}
+
+export async function GET(req: Request) {
+  return handleTokenRequest(req);
+}
+
 function createParticipantToken(
+  apiKey: string,
+  apiSecret: string,
   userInfo: AccessTokenOptions,
   roomName: string,
   roomConfig: RoomConfiguration | undefined
 ): Promise<string> {
-  const at = new AccessToken(API_KEY, API_SECRET, {
+  const at = new AccessToken(apiKey, apiSecret, {
     ...userInfo,
     ttl: '15m',
   });
